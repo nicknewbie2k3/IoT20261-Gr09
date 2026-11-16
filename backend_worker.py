@@ -3,65 +3,139 @@ import time
 import paho.mqtt.client as mqtt
 import psycopg2
 
-# 1. Configuration
-DATABASE_URL = (
-    "postgresql://postgres:0lKJWsGszjvNna6Wli83BE7l@iot20261-gr09-lost-orbit-pooler.sage.cloud.layerbase.dev/iot20261_gr09?sslmode=require"
-)
-MQTT_BROKER = (  # Use "localhost" if running a local broker, or your lab broker IP
-    "localhost"
-)
-MQTT_TOPIC = "lab/group3/dht11"
+# Load configuration dynamically from config.txt
+config = {}
+try:
+  with open("config.txt", "r") as f:
+    for line in f:
+      line = line.strip()
+      if line and not line.startswith("#") and "=" in line:
+        key, value = line.split("=", 1)
+        config[key.strip()] = value.strip()
+  print("Configuration loaded successfully from config.txt")
+except FileNotFoundError:
+  print(
+      "Error: 'config.txt' not found! Please create it in the project folder."
+  )
+
+DATABASE_URL = config.get("DATABASE_URL")
+MQTT_BROKER = config.get("MQTT_BROKER", "localhost")
+MQTT_TOPIC = config.get("MQTT_TOPIC", "lab/group9/sensors")
 
 
-def save_to_layerbase(temp, humidity):
-  """Opens a connection to Layerbase and inserts sensor data."""
+def init_db():
+  """Creates tables without an ID column if they don't exist yet."""
   try:
     conn = psycopg2.connect(DATABASE_URL)
     cursor = conn.cursor()
-    cursor.execute(
-        "INSERT INTO dht11_readings (device_id, temperature, humidity) VALUES"
-        " (%s, %s, %s)",
-        ("esp32_mock_device", temp, humidity),
-    )
+
+    # Table 1: DHT11 Sensor Data (No ID)
+    cursor.execute("""
+            CREATE TABLE IF NOT EXISTS dht11_readings (
+                temperature FLOAT NOT NULL,
+                humidity FLOAT NOT NULL,
+                recorded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+
+    # Table 2: Water Level Sensor Data (No ID)
+    cursor.execute("""
+            CREATE TABLE IF NOT EXISTS water_level_readings (
+                water_level_raw INT NOT NULL,
+                recorded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+
     conn.commit()
     cursor.close()
     conn.close()
-    print(f"-> Successfully saved [Temp: {temp}°C, Humid: {humidity}%] to Layerbase!")
+    print("Database tables verified/created successfully (without ID).")
   except Exception as e:
-    print(f"Database error: {e}")
+    print(f"Database initialization error: {e}")
 
 
-# 2. MQTT Callback when a message arrives
+def save_to_layerbase(temp, humidity, water_raw):
+  """Inserts sensor data and trims tables to keep only the latest 100 rows."""
+  try:
+    conn = psycopg2.connect(DATABASE_URL)
+    cursor = conn.cursor()
+
+    # 1. Insert DHT11 readings
+    cursor.execute(
+        "INSERT INTO dht11_readings (temperature, humidity) VALUES (%s, %s)",
+        (temp, humidity),
+    )
+
+    # 2. Trim dht11_readings using ctid/recorded_at to keep latest 100 rows
+    cursor.execute("""
+            DELETE FROM dht11_readings 
+            WHERE ctid NOT IN (
+                SELECT ctid FROM dht11_readings 
+                ORDER BY recorded_at DESC 
+                LIMIT 100
+            );
+        """)
+
+    # 3. Insert Water Level readings
+    cursor.execute(
+        "INSERT INTO water_level_readings (water_level_raw) VALUES (%s)",
+        (water_raw,),
+    )
+
+    # 4. Trim water_level_readings using ctid/recorded_at to keep latest 100 rows
+    cursor.execute("""
+            DELETE FROM water_level_readings 
+            WHERE ctid NOT IN (
+                SELECT ctid FROM water_level_readings 
+                ORDER BY recorded_at DESC 
+                LIMIT 100
+            );
+        """)
+
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+    print(
+        "-> Successfully saved and trimmed tables to max 100 rows (no ID"
+        " column)!"
+    )
+
+  except Exception as e:
+    print(f"Database error during insert/trim: {e}")
+
+
 def on_message(client, userdata, msg):
   payload_str = msg.payload.decode("utf-8")
-  print(f"Received message on topic {msg.topic}: {payload_str}")
+  print(f"Received JSON payload: {payload_str}")
 
   try:
     data = json.loads(payload_str)
-    temp = float(data["temperature"])
-    humidity = float(data["humidity"])
-    save_to_layerbase(temp, humidity)
+    temp = float(data["temperature_c"])
+    humidity = float(data["humidity_percent"])
+    water_raw = int(data["water_level_raw"])
+
+    save_to_layerbase(temp, humidity, water_raw)
+
   except Exception as e:
-    print(f"Failed to parse JSON payload: {e}")
+    print(f"Failed to parse or save payload: {e}")
 
 
-# 3. Setup MQTT Client
-client = mqtt.Client()
-client.on_message = on_message
+if __name__ == "__main__":
+  init_db()
 
-print(f"Connecting to MQTT broker at {MQTT_BROKER}...")
-client.connect(MQTT_BROKER, 1883, 60)
-client.subscribe(MQTT_TOPIC)
+  client = mqtt.Client()
+  client.on_message = on_message
 
-# Start the MQTT background network loop
-client.loop_start()
-print(
-    "MQTT Worker is running and listening for data... Press Ctrl+C to stop."
-)
+  print(f"Connecting to MQTT broker at {MQTT_BROKER}...")
+  client.connect(MQTT_BROKER, 1883, 60)
+  client.subscribe(MQTT_TOPIC)
 
-try:
-  while True:
-    time.sleep(1)  # Keep the main thread alive
-except KeyboardInterrupt:
-  print("Stopping worker...")
-  client.loop_stop()
+  client.loop_start()
+  print("Backend worker is listening for sensor packets...")
+
+  try:
+    while True:
+      time.sleep(1)
+  except KeyboardInterrupt:
+    client.loop_stop()

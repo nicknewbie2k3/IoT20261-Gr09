@@ -1,0 +1,3 @@
+DATABASE_URL=postgresql://postgres:0lKJWsGszjvNna6Wli83BE7l@iot20261-gr09-lost-orbit-pooler.sage.cloud.layerbase.dev/iot20261_gr09?sslmode=require
+MQTT_BROKER=localhost
+MQTT_TOPIC=lab/group9/sensors
