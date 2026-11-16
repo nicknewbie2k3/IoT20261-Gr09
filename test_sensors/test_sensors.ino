@@ -4,11 +4,11 @@
 #include <PubSubClient.h>
 
 // Wi-Fi: giữ thông tin mạng đang dùng trên máy tính.
-const char* WIFI_SSID = "Pnm";
-const char* WIFI_PASS = "Bangtan1204";
+const char* WIFI_SSID = "YOUR_WIFI_SSID";
+const char* WIFI_PASS = "YOUR_WIFI_PASSWORD";
 
 // Mosquitto chạy trên máy tính. Đổi IP nếu địa chỉ LAN của máy tính thay đổi.
-const char* MQTT_BROKER = "192.168.1.183";
+const char* MQTT_BROKER = "YOUR_WIFI_IPADDRESS";
 constexpr uint16_t MQTT_PORT = 1883;
 const char* MQTT_TOPIC = "lab/group9/sensors";
 
